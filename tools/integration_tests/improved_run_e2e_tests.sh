@@ -353,18 +353,6 @@ TEST_PACKAGES_FOR_ZB=("${TEST_PACKAGES_COMMON[@]}" "rapid_appends" "unfinalized_
 # Test packages for TPC buckets.
 TEST_PACKAGES_FOR_TPC=("operations")
 
-# Packages that have not yet been migrated to the new config file method.
-readonly UNMIGRATED_PACKAGES=(
-  "buffered_read"
-  "negative_stat_cache"
-  "readonly_creds"
-  "mount_timeout"
-  "managed_folders"
-  "concurrent_operations"
-  "interrupt"
-  "mounting"
-)
-
 # acquire_lock: Acquires exclusive lock or exits script on failure.
 # Args: $1 = path to lock file.
 acquire_lock() {
@@ -668,17 +656,9 @@ test_package() {
   local bucket_name="$2"
   local bucket_type="$3"
 
-  local is_migrated=true
-  for unmigrated in "${UNMIGRATED_PACKAGES[@]}"; do
-    if [[ "$package_name" == "$unmigrated" ]]; then
-      is_migrated=false
-      break
-    fi
-  done
-
   # Build go package test command.
   local go_test_cmd_parts=()
-  if ${CONFIG_FILE_RUN} && ${is_migrated}; then
+  if ${CONFIG_FILE_RUN}; then
     go_test_cmd_parts+=("BUCKET_NAME=${bucket_name}")
   fi
   go_test_cmd_parts+=("GODEBUG=asyncpreemptoff=1" "go" "test" "-v" "-timeout=${INTEGRATION_TEST_PACKAGE_TIMEOUT_IN_MINS}m" "${INTEGRATION_TEST_PACKAGE_DIR}/${package_name}")
@@ -688,7 +668,7 @@ test_package() {
   # Test Binary flags after this.
   go_test_cmd_parts+=("-args" "--integrationTest")
 
-  if ${CONFIG_FILE_RUN} && ${is_migrated}; then
+  if ${CONFIG_FILE_RUN}; then
     local config_file_path
     config_file_path=$(realpath "${INTEGRATION_TEST_PACKAGE_DIR}/test_config.yaml")
     go_test_cmd_parts+=("--config-file=${config_file_path}")
@@ -719,7 +699,7 @@ test_package() {
   test_package_log_file=$(create_file_helper "running_package_logs/${bucket_type}/${package_name}.txt")
   # Run the package test command and capture log output with runtime stats.
   log_info "Started running test package [$package_name] for bucket type [$bucket_type] with bucket name [$bucket_name]"
-  log_info "Test is run using test_config.yaml:$is_migrated"
+  log_info "Test is run using test_config.yaml:${CONFIG_FILE_RUN}"
   log_info "Test Command: $go_test_cmd"
 
   if ! eval "$go_test_cmd" > "$test_package_log_file" 2>&1; then
