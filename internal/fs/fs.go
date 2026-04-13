@@ -2656,18 +2656,6 @@ func (fs *fileSystem) ensureNoLocalFilesInDirectory(dir inode.BucketOwnedDirInod
 	return nil
 }
 
-func (fs *fileSystem) checkDirNotEmpty(dir inode.BucketOwnedDirInode, name string) error {
-	unexpected, err := dir.ReadDescendants(context.Background(), 1)
-	if err != nil {
-		return fmt.Errorf("read descendants of the new directory %q: %w", name, err)
-	}
-
-	if len(unexpected) > 0 {
-		return fuse.ENOTEMPTY
-	}
-	return nil
-}
-
 // Rename an old folder to a new folder in a hierarchical bucket. If the new folder already
 // exists and is non-empty, return ENOTEMPTY. If old folder have open files then return
 // ENOTSUP.
@@ -2698,18 +2686,21 @@ func (fs *fileSystem) renameHierarchicalDir(ctx context.Context, oldParent inode
 	// If the call for getBucketDirInode fails it means directory does not exist.
 	newDirInode, err := fs.getBucketDirInode(ctx, newParent, newName)
 	if err == nil {
-		// If the directory exists, then check if it is empty or not.
-		if err = fs.checkDirNotEmpty(newDirInode, newName); err != nil {
-			return err
-		}
-
-		// This refers to an empty destination directory.
-		// The RenameFolder API does not allow renaming to an existing empty directory.
-		// To make this work, we delete the empty directory first from gcsfuse and then perform rename.
-		newParent.Lock()
-		_ = newParent.DeleteChildDir(ctx, newName, false, newDirInode)
-		newParent.Unlock()
 		pendingInodes = append(pendingInodes, newDirInode)
+
+		// The RenameFolder API does not allow renaming to an existing directory.
+		// To make this work, we attempt to delete the destination directory first.
+		// If it is non-empty, this deletion will fail with a PreconditionError,
+		// in which case we immediately return ENOTEMPTY.
+		newParent.Lock()
+		deleteErr := newParent.DeleteChildDir(ctx, newName, false, newDirInode)
+		newParent.Unlock()
+		if deleteErr != nil {
+			var precondErr *gcs.PreconditionError
+			if errors.As(deleteErr, &precondErr) {
+				return fuse.ENOTEMPTY
+			}
+		}
 	}
 
 	// Note:The renameDirLimit is not utilized in the folder rename operation because there is no user-defined limit on new renames.
@@ -2724,10 +2715,26 @@ func (fs *fileSystem) renameHierarchicalDir(ctx context.Context, oldParent inode
 	// Rename old directory to the new directory, keeping both parent directories locked.
 	_, err = oldParent.RenameFolder(ctx, oldDirName.GcsObjectName(), newDirName.GcsObjectName(), oldDirInode)
 	if err != nil {
+		var precondErr *gcs.PreconditionError
+		if errors.As(err, &precondErr) {
+			return fuse.ENOTEMPTY
+		}
 		return fmt.Errorf("failed to rename folder: %w", err)
 	}
 
 	return
+}
+
+func (fs *fileSystem) checkDirNotEmpty(dir inode.BucketOwnedDirInode, name string) error {
+	unexpected, err := dir.ReadDescendants(context.Background(), 1)
+	if err != nil {
+		return fmt.Errorf("read descendants of the new directory %q: %w", name, err)
+	}
+
+	if len(unexpected) > 0 {
+		return fuse.ENOTEMPTY
+	}
+	return nil
 }
 
 // Rename an old directory to a new directory in a non-hierarchical bucket. If the new directory already
