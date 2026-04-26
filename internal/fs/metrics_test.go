@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"reflect"
+
 	"github.com/googlecloudplatform/gcsfuse/v3/cfg"
 	"github.com/googlecloudplatform/gcsfuse/v3/internal/fs"
 	"github.com/googlecloudplatform/gcsfuse/v3/internal/fs/wrappers"
@@ -37,7 +39,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric"
-	"reflect"
 )
 
 // serverConfigParams holds parameters for creating a test file system.
@@ -91,7 +92,7 @@ func createTestFileSystemWithMetrics(ctx context.Context, t *testing.T, params *
 			Write: cfg.WriteConfig{
 				GlobalMaxBlocks:       int64(params.writeGlobalMaxBlocks),
 				EnableStreamingWrites: params.enableStreamingWrites,
-				BlockSizeMb:          1,
+				BlockSizeMb:           1,
 				MaxBlocksPerFile:      10,
 			},
 			Read: cfg.ReadConfig{
@@ -145,7 +146,7 @@ func createWithContents(ctx context.Context, t *testing.T, bucket gcs.Bucket, na
 }
 
 func waitForMetricsProcessing() {
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 }
 
 func TestLookUpInode_Metrics(t *testing.T) {
