@@ -905,7 +905,9 @@ func SetUpLogFilePath(flags []string, GKETempDir string, OldGKElogFilePath strin
 		currentTest := ""
 		if f := flag.Lookup("test.run"); f != nil {
 			currentTest = f.Value.String()
-			currentTest = strings.Trim(currentTest, "^$") // Remove regex anchors
+			// Remove regex anchors and handle subtests by taking the top-level test name.
+			currentTest = strings.Trim(currentTest, "^$")
+			currentTest = strings.Split(currentTest, "/")[0]
 		}
 
 		if currentTest != "" {
