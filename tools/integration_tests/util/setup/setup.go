@@ -900,8 +900,27 @@ func SetUpLogFilePath(flags []string, GKETempDir string, OldGKElogFilePath strin
 	parsedLogFileName := ParseLogFileFromFlags(flags)
 
 	// Infer log filename directly from the parsed config block.
-	if parsedLogFileName == "" && cfg != nil && len(cfg.Configs) > 0 {
-		parsedLogFileName = ParseLogFileFromFlags(cfg.Configs[0].Flags)
+	if parsedLogFileName == "" && cfg != nil {
+		// Use standard flag package to get the current test being run
+		currentTest := ""
+		if f := flag.Lookup("test.run"); f != nil {
+			currentTest = f.Value.String()
+			currentTest = strings.Trim(currentTest, "^$") // Remove regex anchors
+		}
+
+		if currentTest != "" {
+			for _, c := range cfg.Configs {
+				if c.Run == currentTest {
+					parsedLogFileName = ParseLogFileFromFlags(c.Flags)
+					break
+				}
+			}
+		}
+
+		// Fallback to first config if not found
+		if parsedLogFileName == "" && len(cfg.Configs) > 0 {
+			parsedLogFileName = ParseLogFileFromFlags(cfg.Configs[0].Flags)
+		}
 	}
 
 	// Default logFile name.
