@@ -148,6 +148,13 @@ func (b *fastStatBucket) insertListing(ctx context.Context, listing *gcs.Listing
 		return
 	}
 
+	if isDirPath && !dirHasContents && dirName != "" && b.negativeCacheTTL > 0 {
+		hit, m := b.cache.LookUp(dirName, b.clock.Now())
+		if !hit || m == nil {
+			b.cache.AddNegativeEntry(dirName, b.clock.Now().Add(b.negativeCacheTTL))
+		}
+	}
+
 	// 3. Cache Sub-directories (Collapsed Runs)
 	// These represent folders discovered via prefixes in the ListObjects response.
 	for _, p := range listing.CollapsedRuns {
@@ -484,6 +491,19 @@ func (b *fastStatBucket) ListObjects(
 	} else {
 		// note anything we found.
 		b.insertMultipleMinObjects(ctx, listing.MinObjects)
+
+		// Negatively cache empty directories to short-circuit future ListObjects checks.
+		// This is required because the `lookUp` logic for `implicitDir` runs independently
+		// of the TypeCache deprecation flag.
+		isDirPath := strings.HasSuffix(req.Prefix, "/")
+		dirHasContents := len(listing.MinObjects) > 0 || len(listing.CollapsedRuns) > 0
+
+		if isDirPath && !dirHasContents && req.Prefix != "" && b.negativeCacheTTL > 0 {
+			hit, m := b.cache.LookUp(req.Prefix, b.clock.Now())
+			if !hit || m == nil {
+				b.cache.AddNegativeEntry(req.Prefix, b.clock.Now().Add(b.negativeCacheTTL))
+			}
+		}
 	}
 	return
 }
