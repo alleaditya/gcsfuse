@@ -149,10 +149,7 @@ func (b *fastStatBucket) insertListing(ctx context.Context, listing *gcs.Listing
 	}
 
 	if isDirPath && !dirHasContents && dirName != "" && b.negativeCacheTTL > 0 {
-		hit, m := b.cache.LookUp(dirName, b.clock.Now())
-		if !hit || m == nil {
-			b.cache.AddNegativeEntry(dirName, b.clock.Now().Add(b.negativeCacheTTL))
-		}
+		b.cache.AddNegativeEntry(dirName, b.clock.Now().Add(b.negativeCacheTTL))
 	}
 
 	// 3. Cache Sub-directories (Collapsed Runs)
@@ -465,13 +462,7 @@ func (b *fastStatBucket) ListObjects(
 	if b.implicitDir && req.Prefix != "" && strings.HasSuffix(req.Prefix, "/") {
 		hit, m := b.lookUp(req.Prefix)
 		if hit && m == nil {
-			if !b.BucketType().Hierarchical {
-				return &gcs.Listing{}, nil
-			}
-			folderHit, f := b.lookUpFolder(req.Prefix)
-			if folderHit && f == nil {
-				return &gcs.Listing{}, nil
-			}
+			return &gcs.Listing{}, nil
 		}
 	}
 
@@ -491,19 +482,6 @@ func (b *fastStatBucket) ListObjects(
 	} else {
 		// note anything we found.
 		b.insertMultipleMinObjects(ctx, listing.MinObjects)
-
-		// Negatively cache empty directories to short-circuit future ListObjects checks.
-		// This is required because the `lookUp` logic for `implicitDir` runs independently
-		// of the TypeCache deprecation flag.
-		isDirPath := strings.HasSuffix(req.Prefix, "/")
-		dirHasContents := len(listing.MinObjects) > 0 || len(listing.CollapsedRuns) > 0
-
-		if isDirPath && !dirHasContents && req.Prefix != "" && b.negativeCacheTTL > 0 {
-			hit, m := b.cache.LookUp(req.Prefix, b.clock.Now())
-			if !hit || m == nil {
-				b.cache.AddNegativeEntry(req.Prefix, b.clock.Now().Add(b.negativeCacheTTL))
-			}
-		}
 	}
 	return
 }
