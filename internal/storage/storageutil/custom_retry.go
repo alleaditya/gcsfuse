@@ -17,6 +17,7 @@ package storageutil
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"cloud.google.com/go/storage"
 	"github.com/googlecloudplatform/gcsfuse/v3/internal/logger"
@@ -38,32 +39,55 @@ const (
 	retry401
 	// retryUnauthenticated indicates a gRPC Unauthenticated error which requires a retry due to credentials refresh.
 	retryUnauthenticated
+	// retry404BucketDoesNotExist indicates an HTTP 404 error where the bucket was not found during mount.
+	retry404BucketDoesNotExist
+	// retryNotFoundBucketDoesNotExist indicates a gRPC NotFound error where the bucket was not found during mount.
+	retryNotFoundBucketDoesNotExist
+	// retry403 indicates an HTTP 403 Permission Denied error during mount.
+	retry403
+	// retryPermissionDenied indicates a gRPC PermissionDenied error during mount.
+	retryPermissionDenied
 )
+
+const errStrBucketNotExist = "bucket does not exist"
 
 func determineRetryAction(err error) retryAction {
 	if storage.ShouldRetry(err) {
 		return retryTransient
 	}
 
-	// HTTP 401 errors - Invalid Credentials
-	// This is a work-around to fix the corner case where GCSFuse checks the token
-	// as valid but GCS says invalid. This might be due to client-server timer
-	// issues. Actual fix will be refresh the token earlier than 1 hr.
-	// Changes will be done post resolution of the below issue:
-	// https://github.com/golang/oauth2/issues/623
-	// TODO(b/518674297): Please incorporate the correct fix post resolution of the above issue.
-	if typed, ok := err.(*googleapi.Error); ok {
-		if typed.Code == 401 {
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) {
+		// HTTP 401 errors - Invalid Credentials
+		// This is a work-around to fix the corner case where GCSFuse checks the token
+		// as valid but GCS says invalid. This might be due to client-server timer
+		// issues. Actual fix will be refresh the token earlier than 1 hr.
+		// Changes will be done post resolution of the below issue:
+		// https://github.com/golang/oauth2/issues/623
+		// TODO(b/518674297): Please incorporate the correct fix post resolution of the above issue.
+		if apiErr.Code == 401 {
 			return retry401
+		}
+		if apiErr.Code == 403 {
+			return retry403
+		}
+		if apiErr.Code == 404 && strings.Contains(strings.ToLower(apiErr.Message), errStrBucketNotExist) {
+			return retry404BucketDoesNotExist
 		}
 	}
 
-	// This is the same case as above, but for gRPC UNAUTHENTICATED errors. See
-	// https://github.com/golang/oauth2/issues/623
-	// TODO(b/518674297): Please incorporate the correct fix post resolution of the above issue.
 	if status, ok := status.FromError(err); ok {
+		// This is the same case as above, but for gRPC UNAUTHENTICATED errors. See
+		// https://github.com/golang/oauth2/issues/623
+		// TODO(b/518674297): Please incorporate the correct fix post resolution of the above issue.
 		if status.Code() == codes.Unauthenticated {
 			return retryUnauthenticated
+		}
+		if status.Code() == codes.PermissionDenied {
+			return retryPermissionDenied
+		}
+		if status.Code() == codes.NotFound && strings.Contains(strings.ToLower(status.Message()), errStrBucketNotExist) {
+			return retryNotFoundBucketDoesNotExist
 		}
 	}
 	return noRetry
@@ -72,34 +96,41 @@ func determineRetryAction(err error) retryAction {
 // ShouldRetryWithoutLogging checks if the error is transient and should be retried.
 // This method is same as ShouldRetry except it doesn't add warning logs.
 func ShouldRetryWithoutLogging(err error) bool {
-	return determineRetryAction(err) != noRetry
-}
-
-// ShouldRetry checks if the given error is transient and should be retried.
-// It logs a warning message with the error details for any retryable error.
-// Returns true if the error is retryable, false otherwise.
-func ShouldRetry(err error) bool {
 	switch determineRetryAction(err) {
-	case retryTransient:
-		logger.Warnf("Retrying for the error: %v", err)
-		return true
-	case retry401:
-		logger.Warnf("Retrying for error-code 401: %v", err)
-		return true
-	case retryUnauthenticated:
-		logger.Warnf("Retrying for UNAUTHENTICATED error: %v", err)
+	case retryTransient, retry401, retryUnauthenticated:
 		return true
 	default:
 		return false
 	}
 }
 
-func ShouldRetryWithMonitoring(ctx context.Context, err error, metricHandle metrics.MetricHandle) bool {
+// ShouldRetryWithRetryContext checks if the given error is transient and should be retried,
+// logging the retry warning with RetryContext (operation, object, attempt, invocation ID).
+// Returns true if the error is retryable, false otherwise.
+func ShouldRetryWithRetryContext(err error, retryCtx *storage.RetryContext) bool {
+	if !ShouldRetryWithoutLogging(err) {
+		return false
+	}
+	if retryCtx == nil {
+		logger.Warnf("Retrying for error: %v", err)
+		return true
+	}
+	logger.Warnf("Retrying %s for %q: InvocationID: %s, Attempt: %d, due to error: %v",
+		retryCtx.Operation, retryCtx.Object, retryCtx.InvocationID, retryCtx.Attempt+1, err)
+	return true
+}
+
+func ShouldRetryWithMonitoringAndRetryContext(
+	ctx context.Context,
+	err error,
+	retryCtx *storage.RetryContext,
+	metricHandle metrics.MetricHandle,
+) bool {
 	if err == nil {
 		return false
 	}
 
-	retry := ShouldRetry(err)
+	retry := ShouldRetryWithRetryContext(err, retryCtx)
 	if !retry {
 		return false
 	}
@@ -111,4 +142,10 @@ func ShouldRetryWithMonitoring(ctx context.Context, err error, metricHandle metr
 
 	metricHandle.GcsRetryCount(1, val)
 	return retry
+}
+
+// ShouldRetryOnMount checks if the error is retryable during mount initialization.
+// In addition to standard transient errors, it retries HTTP 403/404 and gRPC PermissionDenied/NotFound errors.
+func ShouldRetryOnMount(err error) bool {
+	return determineRetryAction(err) != noRetry
 }

@@ -15,7 +15,7 @@
 
 set -e
 echo "Step 1: Container started. Updating apt and installing dependencies..."
-apt-get update && apt-get install -y wget git build-essential ca-certificates sudo
+apt-get update && apt-get install -y wget git build-essential ca-certificates fuse sudo
 
 echo "Step 2: Cloning GCSFuse repo..."
 git clone -b "$GCSFUSE_BRANCH" https://github.com/GoogleCloudPlatform/gcsfuse.git
@@ -36,6 +36,6 @@ echo "Step 4: Running tests ..."
 # These tests are chosen to verify that machine-type is correctly passed by
 # CSI Driver to GCSFuse and GCSFuse is correctly accepting it and triggering optimization flags
 # like implicit-dirs and rename-dir-limit for high-performance machine-type as expected.
-go test -v ./tools/integration_tests/flag_optimizations/... --integrationTest --mountedDirectory=/data_mnt --testbucket="$BUCKET_NAME" -run "TestImplicitDirsEnabled|TestRenameDirLimitSet"
+go test -v ./tools/integration_tests/flag_optimizations/... --integrationTest --config-file="$(pwd)/tools/integration_tests/test_config.yaml" --mountedDirectory=/data_mnt --testbucket="$BUCKET_NAME" -run "TestImplicitDirsEnabled|TestRenameDirLimitSet"
 
 echo "Step 5: Test finished successfully."

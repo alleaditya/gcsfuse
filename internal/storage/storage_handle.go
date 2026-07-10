@@ -29,6 +29,7 @@ import (
 	control "cloud.google.com/go/storage/control/apiv2"
 	"cloud.google.com/go/storage/control/apiv2/controlpb"
 	"cloud.google.com/go/storage/experimental"
+	"github.com/google/uuid"
 	"github.com/googleapis/gax-go/v2"
 	"github.com/googlecloudplatform/gcsfuse/v3/cfg"
 	"github.com/googlecloudplatform/gcsfuse/v3/internal/logger"
@@ -175,8 +176,8 @@ func setRetryConfig(ctx context.Context, sc *storage.Client, clientConfig *stora
 		storage.WithPolicy(storage.RetryAlways),
 		storage.WithMaxAttempts(clientConfig.MaxRetryAttempts),
 		storage.WithMaxRetryDuration(0),
-		storage.WithErrorFunc(func(err error) bool {
-			return storageutil.ShouldRetryWithMonitoring(ctx, err, clientConfig.MetricHandle)
+		storage.WithErrorFuncWithContext(func(err error, retryCtx *storage.RetryContext) bool {
+			return storageutil.ShouldRetryWithMonitoringAndRetryContext(ctx, err, retryCtx, clientConfig.MetricHandle)
 		})}
 
 	sc.SetRetry(retryOpts...)
@@ -247,7 +248,7 @@ func verifyDirectPathConnectivity(ctx context.Context, clientConfig *storageutil
 	// Disable Go SDK retries for this call to let ExecuteWithRetry handle it.
 	sc.SetRetry(storage.WithMaxAttempts(1))
 
-	_, statErr := storageutil.ExecuteWithRetryAtLogLevel(ctx, retryConfig, "Attrs", testObject, apiCall, logger.LevelInfo)
+	_, statErr := storageutil.ExecuteWithRetryAtLogLevel(ctx, retryConfig, "Attrs", testObject, uuid.NewString(), apiCall, logger.LevelInfo)
 
 	// We should get a notFound error and not any error when the object doesn't exist.
 	// Any error other than notFound is treated as dp connection failure.
@@ -371,7 +372,7 @@ func (sh *storageClient) getStorageLayout(bucketName string) (*controlpb.Storage
 	stoargeLayout, err := sh.storageControlClient.GetStorageLayout(context.Background(), &controlpb.GetStorageLayoutRequest{
 		Name:      fmt.Sprintf("projects/_/buckets/%s/storageLayout", bucketName),
 		Prefix:    "",
-		RequestId: "",
+		RequestId: uuid.NewString(),
 	}, callOptions...)
 
 	return stoargeLayout, err
